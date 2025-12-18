@@ -43,8 +43,7 @@ def call_gemini_vision(prompt: str, image_data=None) -> str:
     if not GEMINI_API_KEY:
         return "❌ Clé API manquante dans les variables Render."
     try:
-        # Utilisation du nom de modèle le plus compatible
-        model = genai.GenerativeModel('gemini-1.5-flash')
+model = genai.GenerativeModel('gemini-1.5-pro')
         
         content = [prompt]
         if image_data:
@@ -194,3 +193,4 @@ function share() {
 </script>
 </body>
 </html>"""
+
