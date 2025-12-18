@@ -10,9 +10,10 @@ from dotenv import load_dotenv
 
 # --- CONFIGURATION ---
 load_dotenv()
-# Récupération de la clé depuis l'onglet Environment de Render
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") 
-genai.configure(api_key=GEMINI_API_KEY)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+# On configure l'API en forçant le transport REST pour éviter l'erreur v1beta/404
+genai.configure(api_key=GEMINI_API_KEY, transport='rest')
 
 app = FastAPI()
 
@@ -34,7 +35,6 @@ def prepare_image_for_gemini(image_bytes):
         img.thumbnail((800, 800))
         buffer = BytesIO()
         img.save(buffer, format="JPEG")
-        # On retourne les octets pour Gemini
         return {"mime_type": "image/jpeg", "data": buffer.getvalue()}
     except Exception:
         return None
@@ -43,8 +43,8 @@ def call_gemini_vision(prompt: str, image_data=None) -> str:
     if not GEMINI_API_KEY:
         return "❌ Clé API GEMINI_API_KEY manquante dans Render."
     try:
-        # Correction du nom du modèle pour éviter l'erreur 404
-        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        # Utilisation du nom de modèle le plus stable
+        model = genai.GenerativeModel('gemini-1.5-flash')
         
         content = [prompt]
         if image_data:
@@ -56,7 +56,6 @@ def call_gemini_vision(prompt: str, image_data=None) -> str:
         return f"⚙️ Erreur technique : {str(e)}"
 
 def format_html_output(text: str) -> str:
-    # Formatage propre des sections pour l'affichage mobile
     clean = text.replace("**", "").replace("###", "##")
     sections = re.split(r'##', clean)
     html_res = ""
@@ -83,16 +82,13 @@ async def diagnostic(image: UploadFile = File(None), panne_description: str = Fo
         raw_data = await image.read()
         img_payload = prepare_image_for_gemini(raw_data)
     
-    prompt = f"""Expert Somfy. Analyse : {panne_description}. 
-    Si photo : identifie modèle, fils, LEDs. 
-    Format strict : ## Identification ## Sécurité ## Tests ## Correction"""
+    prompt = f"Expert Somfy. Analyse : {panne_description}. Si photo : identifie modèle et fils. Format strict : ## Identification ## Sécurité ## Tests ## Correction"
     
     raw_text = call_gemini_vision(prompt, img_payload)
     return HTMLResponse(content=format_html_output(raw_text))
 
 @app.get("/", response_class=HTMLResponse)
 def home():
-    # Ton interface avec bouton micro et stockage local
     return """<!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -111,91 +107,3 @@ def home():
         .btn-photo { background: #f0f2f5; color: #555; border: 1px dashed #ccc; }
         .btn-main { background: #667eea; color: white; margin-top: 15px; }
         .btn-share { background: #25d366; color: white; display: none; }
-        .btn-reset { background: #f8fafc; color: #64748b; border: 1px solid #e2e8f0; display: none; margin-top: 10px; }
-        .input-box { position: relative; margin-top: 10px; }
-        textarea { width: 100%; height: 100px; border-radius: 12px; border: 1px solid #ddd; padding: 12px; font-size: 1rem; box-sizing: border-box; }
-        .mic { position: absolute; right: 10px; bottom: 12px; border: none; background: #f0f2f5; padding: 10px; border-radius: 50%; cursor: pointer; font-size: 1.2rem; }
-        .mic-on { background: #ff4d4d; color: white; animation: pulse 1s infinite; }
-        @keyframes pulse { 0% {opacity: 1} 50% {opacity: 0.6} 100% {opacity: 1} }
-        #preview { width: 100%; border-radius: 12px; display: none; margin-bottom: 15px; }
-        #loading { display: none; text-align: center; margin: 15px; color: #667eea; font-weight: bold; }
-    </style>
-</head>
-<body>
-<div class="card">
-    <h1>Somfy Expert AI</h1>
-    <img id="preview">
-    <button class="btn btn-photo" onclick="document.getElementById('in').click()">📸 Photo de l'équipement</button>
-    <input type="file" id="in" accept="image/*" capture="environment" hidden onchange="pv(this)">
-    <div class="input-box">
-        <textarea id="desc" placeholder="Décrivez la panne..."></textarea>
-        <button id="m" class="mic" onclick="tk()">🎙️</button>
-    </div>
-    <button id="go" class="btn btn-main" onclick="run()">⚡ Lancer le Diagnostic</button>
-    <button id="sh" class="btn btn-share" onclick="share()">📤 Partager le Diagnostic</button>
-    <button id="rs" class="btn btn-reset" onclick="resetAll()">🔄 Nouveau Diagnostic</button>
-    <div id="loading">⏳ Analyse en cours...</div>
-    <div id="result"></div>
-</div>
-<script>
-let file = null; let rec = null;
-window.onload = () => {
-    const savedResult = localStorage.getItem('lastDiag');
-    if (savedResult) {
-        document.getElementById('result').innerHTML = savedResult;
-        document.getElementById('sh').style.display = 'flex';
-        document.getElementById('rs').style.display = 'flex';
-    }
-};
-function pv(i) {
-    if (i.files[0]) {
-        file = i.files[0];
-        const r = new FileReader();
-        r.onload = (e) => { const p = document.getElementById('preview'); p.src = e.target.result; p.style.display = 'block'; };
-        r.readAsDataURL(file);
-    }
-}
-function tk() {
-    const S = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!S) return alert("Micro non supporté sur ce navigateur");
-    if (!rec) {
-        rec = new S(); rec.lang = 'fr-FR';
-        rec.onresult = (e) => { document.getElementById('desc').value += " " + e.results[0][0].transcript; };
-        rec.onstart = () => document.getElementById('m').classList.add('mic-on');
-        rec.onend = () => document.getElementById('m').classList.remove('mic-on');
-    }
-    try { rec.start(); } catch(e) { rec.stop(); }
-}
-async function run() {
-    const res = document.getElementById('result');
-    const load = document.getElementById('loading');
-    const sh = document.getElementById('sh');
-    const rs = document.getElementById('rs');
-    const go = document.getElementById('go');
-    go.disabled = true; load.style.display = 'block'; res.innerHTML = ""; sh.style.display = 'none'; rs.style.display = 'none';
-    const fd = new FormData();
-    if (file) fd.append('image', file);
-    fd.append('panne_description', document.getElementById('desc').value);
-    try {
-        const r = await fetch('/diagnostic', { method: 'POST', body: fd });
-        const htmlText = await r.text();
-        res.innerHTML = htmlText;
-        localStorage.setItem('lastDiag', htmlText);
-        sh.style.display = 'flex'; rs.style.display = 'flex';
-    } catch (e) { alert("Erreur de connexion"); } 
-    finally { load.style.display = 'none'; go.disabled = false; }
-}
-function resetAll() {
-    if(confirm("Effacer pour un nouveau diagnostic ?")) {
-        localStorage.removeItem('lastDiag');
-        location.reload();
-    }
-}
-function share() {
-    const t = document.getElementById('result').innerText;
-    if (navigator.share) { navigator.share({ title: 'Diagnostic Somfy', text: t }); }
-    else { navigator.clipboard.writeText(t); alert("Copié dans le presse-papier !"); }
-}
-</script>
-</body>
-</html>"""
