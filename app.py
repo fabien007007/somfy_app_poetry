@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# On configure l'API en forçant le transport REST pour éviter l'erreur v1beta/404
+# Configuration stable : on force le transport 'rest' pour éviter l'erreur 404/v1beta
 genai.configure(api_key=GEMINI_API_KEY, transport='rest')
 
 app = FastAPI()
@@ -41,9 +41,9 @@ def prepare_image_for_gemini(image_bytes):
 
 def call_gemini_vision(prompt: str, image_data=None) -> str:
     if not GEMINI_API_KEY:
-        return "❌ Clé API GEMINI_API_KEY manquante dans Render."
+        return "❌ Clé API manquante dans les variables Render."
     try:
-        # Utilisation du nom de modèle le plus stable
+        # Utilisation du nom de modèle le plus compatible
         model = genai.GenerativeModel('gemini-1.5-flash')
         
         content = [prompt]
@@ -82,7 +82,7 @@ async def diagnostic(image: UploadFile = File(None), panne_description: str = Fo
         raw_data = await image.read()
         img_payload = prepare_image_for_gemini(raw_data)
     
-    prompt = f"Expert Somfy. Analyse : {panne_description}. Si photo : identifie modèle et fils. Format strict : ## Identification ## Sécurité ## Tests ## Correction"
+    prompt = f"Tu es l'expert technique Somfy. Analyse : {panne_description}. Format : ## Identification ## Sécurité ## Tests ## Correction"
     
     raw_text = call_gemini_vision(prompt, img_payload)
     return HTMLResponse(content=format_html_output(raw_text))
@@ -181,12 +181,15 @@ async function run() {
     finally { load.style.display = 'none'; go.disabled = false; }
 }
 function resetAll() {
-    if(confirm("Nouveau diagnostic ?")) { localStorage.removeItem('lastDiag'); location.reload(); }
+    if(confirm("Effacer pour un nouveau diagnostic ?")) {
+        localStorage.removeItem('lastDiag');
+        location.reload();
+    }
 }
 function share() {
     const t = document.getElementById('result').innerText;
     if (navigator.share) { navigator.share({ title: 'Diagnostic Somfy', text: t }); }
-    else { navigator.clipboard.writeText(t); alert("Copié !"); }
+    else { navigator.clipboard.writeText(t); alert("Copié dans le presse-papier !"); }
 }
 </script>
 </body>
