@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 
 # --- CONFIGURATION ---
 load_dotenv()
+# Récupération de la clé depuis l'onglet Environment de Render
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") 
 genai.configure(api_key=GEMINI_API_KEY)
 
@@ -33,24 +34,29 @@ def prepare_image_for_gemini(image_bytes):
         img.thumbnail((800, 800))
         buffer = BytesIO()
         img.save(buffer, format="JPEG")
-        return Image.open(buffer)
-    except Exception as e:
+        # On retourne les octets pour Gemini
+        return {"mime_type": "image/jpeg", "data": buffer.getvalue()}
+    except Exception:
         return None
 
-def call_gemini_vision(prompt: str, pil_image=None) -> str:
+def call_gemini_vision(prompt: str, image_data=None) -> str:
     if not GEMINI_API_KEY:
-        return "❌ Clé API Gemini manquante dans les variables Render."
+        return "❌ Clé API GEMINI_API_KEY manquante dans Render."
     try:
-        model = genai.GenerativeModel('models/gemini-1.5-flash')
-        inputs = [prompt]
-        if pil_image:
-            inputs.append(pil_image)
-        response = model.generate_content(inputs)
+        # Correction du nom du modèle pour éviter l'erreur 404
+        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        
+        content = [prompt]
+        if image_data:
+            content.append(image_data)
+            
+        response = model.generate_content(content)
         return response.text
     except Exception as e:
-        return f"⚙️ Erreur Gemini: {str(e)}"
+        return f"⚙️ Erreur technique : {str(e)}"
 
 def format_html_output(text: str) -> str:
+    # Formatage propre des sections pour l'affichage mobile
     clean = text.replace("**", "").replace("###", "##")
     sections = re.split(r'##', clean)
     html_res = ""
@@ -72,25 +78,21 @@ def format_html_output(text: str) -> str:
 
 @app.post("/diagnostic")
 async def diagnostic(image: UploadFile = File(None), panne_description: str = Form("")):
-    img_pil = None
+    img_payload = None
     if image and image.filename:
         raw_data = await image.read()
-        img_pil = prepare_image_for_gemini(raw_data)
+        img_payload = prepare_image_for_gemini(raw_data)
     
-    prompt = f"""Tu es l'expert technique Somfy ultime. 
-    Analyse cette situation : {panne_description}.
-    Si une image est fournie, identifie précisément le modèle Somfy, les branchements et toute anomalie visuelle.
-    Réponds EXCLUSIVEMENT avec ce format :
-    ## Identification
-    ## Sécurité
-    ## Tests
-    ## Correction"""
+    prompt = f"""Expert Somfy. Analyse : {panne_description}. 
+    Si photo : identifie modèle, fils, LEDs. 
+    Format strict : ## Identification ## Sécurité ## Tests ## Correction"""
     
-    raw_text = call_gemini_vision(prompt, img_pil)
+    raw_text = call_gemini_vision(prompt, img_payload)
     return HTMLResponse(content=format_html_output(raw_text))
 
 @app.get("/", response_class=HTMLResponse)
 def home():
+    # Ton interface avec bouton micro et stockage local
     return """<!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -197,4 +199,3 @@ function share() {
 </script>
 </body>
 </html>"""
-
