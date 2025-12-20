@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# Importation de ta base de données Somfy
 try:
     import somfy_database
     SOMFY_PRODUCTS = somfy_database.SOMFY_PRODUCTS
@@ -48,45 +49,38 @@ def format_html_output(text: str) -> str:
 @app.post("/diagnostic")
 async def diagnostic(image: UploadFile = File(None), panne_description: str = Form("")):
     api_key = os.environ.get("GROQ_API_KEY")
-    if not api_key:
-        return HTMLResponse(content="Erreur : Clé API GROQ manquante dans Railway.")
-    
     client = Groq(api_key=api_key)
     
-    # Message de base
-    prompt_instruction = f"Tu es l'Expert Somfy. Base de données : {SOMFY_PRODUCTS}. Format requis : ## Identification ## Sécurité ## Tests ## Correction. Analyse l'image et la description pour aider le technicien."
-    
-    content = [{"type": "text", "text": f"{prompt_instruction}\n\nDescription du technicien : {panne_description}"}]
+    instruction = f"Tu es l'Expert Somfy. Base de données : {SOMFY_PRODUCTS}. Format : ## Identification ## Sécurité ## Tests ## Correction."
+    content = [{"type": "text", "text": f"{instruction}\n\nPanne : {panne_description}"}]
 
-    # Encodage de l'image pour la Vision
     if image and image.filename:
-        image_data = await image.read()
-        base64_image = base64.b64encode(image_data).decode('utf-8')
+        img_data = await image.read()
+        img_b64 = base64.b64encode(img_data).decode('utf-8')
         content.append({
             "type": "image_url",
-            "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
+            "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}
         })
 
     try:
-        # Utilisation du modèle 90B Vision (Plus stable et puissant)
+        # Utilisation du modèle 11b vision qui est le standard actuel
         chat_completion = client.chat.completions.create(
             messages=[{"role": "user", "content": content}],
-            model="llama-3.2-90b-vision-preview", 
+            model="llama-3.2-11b-vision-preview", 
         )
         raw_text = chat_completion.choices[0].message.content
     except Exception as e:
-        raw_text = f"## Identification ## Erreur Technique \nLe modèle d'IA a rencontré un problème : {str(e)}"
+        raw_text = f"## Identification ## Erreur technique \n{str(e)}"
     
     return HTMLResponse(content=format_html_output(raw_text))
 
 @app.get("/", response_class=HTMLResponse)
 def home():
-    # Le code HTML reste le même pour ton interface
     return """<!DOCTYPE html>
 <html lang="fr">
 <head>
     <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Somfy Expert AI</title>
+    <title>Somfy Expert AI - Pro</title>
     <style>
         body { font-family: -apple-system, sans-serif; background: #f4f7f6; padding: 15px; margin: 0; }
         .card { background: white; max-width: 500px; margin: auto; padding: 20px; border-radius: 20px; box-shadow: 0 8px 20px rgba(0,0,0,0.05); }
@@ -99,6 +93,13 @@ def home():
         .btn { width: 100%; padding: 15px; margin: 8px 0; border: none; border-radius: 12px; cursor: pointer; font-weight: bold; font-size: 1rem; display: flex; align-items: center; justify-content: center; gap: 10px; }
         .btn-photo { background: #f0f2f5; color: #555; border: 1px dashed #ccc; }
         .btn-main { background: #667eea; color: white; margin-top: 15px; }
+        .btn-share { background: #25d366; color: white; display: none; }
+        .btn-reset { background: #f8fafc; color: #64748b; border: 1px solid #e2e8f0; display: none; margin-top: 10px; }
+        .input-box { position: relative; margin-top: 10px; }
+        textarea { width: 100%; height: 100px; border-radius: 12px; border: 1px solid #ddd; padding: 12px; font-size: 1rem; box-sizing: border-box; resize: none; }
+        .mic { position: absolute; right: 10px; bottom: 12px; border: none; background: #f0f2f5; padding: 10px; border-radius: 50%; cursor: pointer; font-size: 1.2rem; }
+        .mic-on { background: #ff4d4d; color: white; animation: pulse 1s infinite; }
+        @keyframes pulse { 0% {opacity: 1} 50% {opacity: 0.6} 100% {opacity: 1} }
         #preview { width: 100%; border-radius: 12px; display: none; margin-bottom: 15px; max-height: 200px; object-fit: cover; }
         #loading { display: none; text-align: center; margin: 15px; color: #667eea; font-weight: bold; }
     </style>
@@ -109,13 +110,18 @@ def home():
     <img id="preview">
     <button class="btn btn-photo" onclick="document.getElementById('in').click()">📸 Photo de l'équipement</button>
     <input type="file" id="in" accept="image/*" capture="environment" hidden onchange="pv(this)">
-    <textarea id="desc" style="width:100%; height:80px; margin-top:10px; border-radius:12px; border:1px solid #ddd; padding:10px;" placeholder="Description de la panne..."></textarea>
+    <div class="input-box">
+        <textarea id="desc" placeholder="Décrivez la panne..."></textarea>
+        <button id="m" class="mic" onclick="tk()">🎙️</button>
+    </div>
     <button id="go" class="btn btn-main" onclick="run()">⚡ Lancer le Diagnostic</button>
-    <div id="loading">⏳ Analyse de la photo en cours...</div>
+    <button id="sh" class="btn btn-share" onclick="share()">📤 Partager</button>
+    <button id="rs" class="btn btn-reset" onclick="location.reload()">🔄 Nouveau</button>
+    <div id="loading">⏳ Analyse en cours...</div>
     <div id="result"></div>
 </div>
 <script>
-let file = null;
+let file = null; let rec = null;
 function pv(i) {
     if (i.files[0]) {
         file = i.files[0];
@@ -123,6 +129,17 @@ function pv(i) {
         r.onload = (e) => { const p = document.getElementById('preview'); p.src = e.target.result; p.style.display = 'block'; };
         r.readAsDataURL(file);
     }
+}
+function tk() {
+    const S = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!S) return alert("Micro non supporté");
+    if (!rec) {
+        rec = new S(); rec.lang = 'fr-FR';
+        rec.onresult = (e) => { document.getElementById('desc').value += " " + e.results[0][0].transcript; };
+        rec.onstart = () => document.getElementById('m').classList.add('mic-on');
+        rec.onend = () => document.getElementById('m').classList.remove('mic-on');
+    }
+    try { rec.start(); } catch(e) { rec.stop(); }
 }
 async function run() {
     const res = document.getElementById('result');
@@ -135,8 +152,15 @@ async function run() {
     try {
         const r = await fetch('/diagnostic', { method: 'POST', body: fd });
         res.innerHTML = await r.text();
+        document.getElementById('sh').style.display = 'flex';
+        document.getElementById('rs').style.display = 'flex';
     } catch (e) { alert("Erreur réseau"); } 
     finally { load.style.display = 'none'; go.disabled = false; }
+}
+function share() {
+    const t = document.getElementById('result').innerText;
+    if (navigator.share) { navigator.share({ title: 'Somfy Diag', text: t }); }
+    else { navigator.clipboard.writeText(t); alert("Copié !"); }
 }
 </script>
 </body>
