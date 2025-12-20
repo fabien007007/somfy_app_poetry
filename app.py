@@ -1,22 +1,23 @@
 from fastapi import FastAPI, UploadFile, Form, File
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
-from google import genai  # On passe sur le nouveau SDK stable
+from google import genai 
 import os
 import re
 from io import BytesIO
 from PIL import Image
 from dotenv import load_dotenv
 
-# On garde ta base Somfy précieuse
-from somfy_database import SOMFY_PRODUCTS
+# Importation de ta base de connaissances dynamique
+try:
+    from somfy_database import SOMFY_PRODUCTS
+except ImportError:
+    SOMFY_PRODUCTS = {}
 
-# --- CONFIGURATION ---
 load_dotenv()
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Le nouveau client simplifie tout et gère les URLs v1beta proprement
-client = genai.Client(api_key=GEMINI_API_KEY)
+# Initialisation du nouveau client Google GenAI (Production)
+client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 app = FastAPI()
 
@@ -28,31 +29,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- LOGIQUE GEMINI (NOUVELLE VERSION) ---
-
-def call_gemini_vision(prompt: str, image_pil=None) -> str:
-    if not GEMINI_API_KEY: 
-        return "❌ Clé API manquante."
-    try:
-        content_list = [prompt]
-        if image_pil:
-            content_list.append(image_pil)
-            
-        # La nouvelle syntaxe qui corrige le bug de l'URL 'flashgenerateContent'
-        response = client.models.generate_content(
-            model="gemini-1.5-flash",
-            contents=content_list,
-            config={
-                "system_instruction": f"Tu es l'Expert Technique Somfy. Base de données : {SOMFY_PRODUCTS}. Si bus IB+, demande impérativement 16V DC."
-            }
-        )
-        return response.text
-    except Exception as e:
-        # On affiche l'erreur si jamais un autre problème survient
-        return f"⚙️ Erreur technique persistante : {str(e)}"
+# --- LOGIQUE DE FORMATAGE ---
 
 def format_html_output(text: str) -> str:
-    # On garde ta logique de formatage que tu as mis tant de temps à peaufiner
     clean = text.replace("**", "").replace("###", "##")
     sections = re.split(r'##', clean)
     html_res = ""
@@ -70,7 +49,7 @@ def format_html_output(text: str) -> str:
         html_res += f"<div class='{css}'><div class='section-header'><span class='tag'>{tag}</span> {icon} {title}</div><div class='section-body'>{body}</div></div>"
     return html_res
 
-# --- ROUTES ---
+# --- ROUTES API ---
 
 @app.post("/diagnostic")
 async def diagnostic(image: UploadFile = File(None), panne_description: str = Form("")):
@@ -79,15 +58,37 @@ async def diagnostic(image: UploadFile = File(None), panne_description: str = Fo
         raw_data = await image.read()
         img_pil = Image.open(BytesIO(raw_data))
     
-    # Prompt optimisé pour tes sections HTML
     prompt = f"Analyse cette panne : {panne_description}. Format obligatoire : ## Identification ## Sécurité ## Tests ## Correction"
     
-    raw_text = call_gemini_vision(prompt, img_pil)
+    try:
+        content_list = [prompt]
+        if img_pil:
+            content_list.append(img_pil)
+            
+        response = client.models.generate_content(
+            model="gemini-1.5-flash",
+            contents=content_list,
+            config={
+                "system_instruction": f"""
+                Tu es l'Expert Technique Somfy.
+                BASE DE DONNÉES : {SOMFY_PRODUCTS}
+                
+                CONSIGNES DE PRODUCTION :
+                1. Identifie le matériel à partir de la description ou de l'image.
+                2. Si trouvé dans la base, donne les caractéristiques techniques et les URL des notices.
+                3. Si bus IB+, demande systématiquement la mesure de tension (cible 16V DC).
+                4. Rappelle les règles de sécurité : gants isolants et vérification absence de tension 230V.
+                """
+            }
+        )
+        raw_text = response.text
+    except Exception as e:
+        raw_text = f"## Identification ## Erreur technique \n{str(e)}"
+    
     return HTMLResponse(content=format_html_output(raw_text))
 
 @app.get("/", response_class=HTMLResponse)
 def home():
-    # Ton interface HTML complète (inchangée)
     return """<!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -193,3 +194,7 @@ function share() {
 </script>
 </body>
 </html>"""
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
