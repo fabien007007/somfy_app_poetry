@@ -43,9 +43,10 @@ def call_gemini_vision(prompt: str, image_data=None) -> str:
     if not GEMINI_API_KEY:
         return "❌ Clé API manquante dans les variables Render."
     try:
-        # Bloc corrigé avec l'indentation correcte (4 espaces)
+        # Supprime tout devant cette ligne et mets exactement 8 espaces :
         model = genai.GenerativeModel('gemini-1.5-flash')
         
+        # Pareil ici, 8 espaces :
         content = [prompt]
         if image_data:
             content.append(image_data)
@@ -194,3 +195,4 @@ function share() {
 </script>
 </body>
 </html>"""
+
