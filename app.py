@@ -1,19 +1,22 @@
 from fastapi import FastAPI, UploadFile, Form, File
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
-import google.generativeai as genai
+from google import genai  # Utilisation du nouveau SDK stable
 import os
 import re
 from io import BytesIO
 from PIL import Image
 from dotenv import load_dotenv
 
+# Import de ta base de connaissances locale
+from somfy_database import SOMFY_PRODUCTS
+
 # --- CONFIGURATION ---
 load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Configuration stable : on force le transport 'rest' pour éviter l'erreur 404/v1beta
-genai.configure(api_key=GEMINI_API_KEY, transport='rest')
+# Initialisation du nouveau client (gère mieux les URLs v1beta automatiquement)
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 app = FastAPI()
 
@@ -25,39 +28,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- LOGIQUE GEMINI ---
+# --- LOGIQUE GEMINI (NOUVEAU SDK) ---
 
-def prepare_image_for_gemini(image_bytes):
+def call_gemini_vision(prompt: str, image_pil=None) -> str:
+    if not GEMINI_API_KEY: 
+        return "❌ Clé API manquante."
     try:
-        img = Image.open(BytesIO(image_bytes))
-        if img.mode != "RGB":
-            img = img.convert("RGB")
-        img.thumbnail((800, 800))
-        buffer = BytesIO()
-        img.save(buffer, format="JPEG")
-        return {"mime_type": "image/jpeg", "data": buffer.getvalue()}
-    except Exception:
-        return None
-
-def call_gemini_vision(prompt: str, image_data=None) -> str:
-    if not GEMINI_API_KEY: return "❌ Clé API manquante."
-    try:
-        # On force la création d'un nouveau client à chaque appel pour écraser le cache
-        genai.configure(api_key=GEMINI_API_KEY, transport='rest')
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        
-        # On s'assure que le contenu est propre
-        content = [prompt]
-        if image_data:
-            content.append(image_data)
+        content_list = [prompt]
+        if image_pil:
+            content_list.append(image_pil)
             
-        response = model.generate_content(content)
+        # Appel avec la nouvelle syntaxe client.models.generate_content
+        response = client.models.generate_content(
+            model="gemini-1.5-flash",
+            contents=content_list,
+            config={
+                "system_instruction": f"Tu es l'Expert Technique Somfy. Utilise ces données : {SOMFY_PRODUCTS}. Si bus IB+, demande 16V DC."
+            }
+        )
         return response.text
     except Exception as e:
-        # Si ça échoue encore, on capture l'erreur exacte pour comprendre
         return f"⚙️ Erreur technique persistante : {str(e)}"
 
 def format_html_output(text: str) -> str:
+    # Ta logique de formatage reste identique pour ne pas casser ton interface
     clean = text.replace("**", "").replace("###", "##")
     sections = re.split(r'##', clean)
     html_res = ""
@@ -79,18 +73,20 @@ def format_html_output(text: str) -> str:
 
 @app.post("/diagnostic")
 async def diagnostic(image: UploadFile = File(None), panne_description: str = Form("")):
-    img_payload = None
+    img_pil = None
     if image and image.filename:
         raw_data = await image.read()
-        img_payload = prepare_image_for_gemini(raw_data)
+        img_pil = Image.open(BytesIO(raw_data))
     
-    prompt = f"Tu es l'expert technique Somfy. Analyse : {panne_description}. Format : ## Identification ## Sécurité ## Tests ## Correction"
+    # Intégration de tes instructions de formatage dans le prompt
+    prompt = f"Analyse cette panne : {panne_description}. Format de réponse obligatoire : ## Identification ## Sécurité ## Tests ## Correction"
     
-    raw_text = call_gemini_vision(prompt, img_payload)
+    raw_text = call_gemini_vision(prompt, img_pil)
     return HTMLResponse(content=format_html_output(raw_text))
 
 @app.get("/", response_class=HTMLResponse)
 def home():
+    # Ton interface HTML complète (inchangée pour garder ton design)
     return """<!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -196,9 +192,3 @@ function share() {
 </script>
 </body>
 </html>"""
-
-
-
-
-
-
