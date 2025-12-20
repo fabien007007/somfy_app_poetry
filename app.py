@@ -83,7 +83,7 @@ async def diagnostic(image: UploadFile = File(None), panne_description: str = Fo
     try:
         chat_completion = client.chat.completions.create(
             messages=[{"role": "user", "content": content}],
-            model="llama-3.2-11b-vision-preview", # Modèle avec Vision
+            model="llama-3.2-90b-vision-preview", # Modèle avec Vision
         )
         raw_text = chat_completion.choices[0].message.content
     except Exception as e:
@@ -170,3 +170,4 @@ function share() {
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+
