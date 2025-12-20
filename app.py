@@ -1,21 +1,21 @@
 from fastapi import FastAPI, UploadFile, Form, File
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
-from google import genai  # Utilisation du nouveau SDK stable
+from google import genai  # On passe sur le nouveau SDK stable
 import os
 import re
 from io import BytesIO
 from PIL import Image
 from dotenv import load_dotenv
 
-# Import de ta base de connaissances locale
+# On garde ta base Somfy précieuse
 from somfy_database import SOMFY_PRODUCTS
 
 # --- CONFIGURATION ---
 load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Initialisation du nouveau client (gère mieux les URLs v1beta automatiquement)
+# Le nouveau client simplifie tout et gère les URLs v1beta proprement
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 app = FastAPI()
@@ -28,7 +28,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- LOGIQUE GEMINI (NOUVEAU SDK) ---
+# --- LOGIQUE GEMINI (NOUVELLE VERSION) ---
 
 def call_gemini_vision(prompt: str, image_pil=None) -> str:
     if not GEMINI_API_KEY: 
@@ -38,20 +38,21 @@ def call_gemini_vision(prompt: str, image_pil=None) -> str:
         if image_pil:
             content_list.append(image_pil)
             
-        # Appel avec la nouvelle syntaxe client.models.generate_content
+        # La nouvelle syntaxe qui corrige le bug de l'URL 'flashgenerateContent'
         response = client.models.generate_content(
             model="gemini-1.5-flash",
             contents=content_list,
             config={
-                "system_instruction": f"Tu es l'Expert Technique Somfy. Utilise ces données : {SOMFY_PRODUCTS}. Si bus IB+, demande 16V DC."
+                "system_instruction": f"Tu es l'Expert Technique Somfy. Base de données : {SOMFY_PRODUCTS}. Si bus IB+, demande impérativement 16V DC."
             }
         )
         return response.text
     except Exception as e:
+        # On affiche l'erreur si jamais un autre problème survient
         return f"⚙️ Erreur technique persistante : {str(e)}"
 
 def format_html_output(text: str) -> str:
-    # Ta logique de formatage reste identique pour ne pas casser ton interface
+    # On garde ta logique de formatage que tu as mis tant de temps à peaufiner
     clean = text.replace("**", "").replace("###", "##")
     sections = re.split(r'##', clean)
     html_res = ""
@@ -78,15 +79,15 @@ async def diagnostic(image: UploadFile = File(None), panne_description: str = Fo
         raw_data = await image.read()
         img_pil = Image.open(BytesIO(raw_data))
     
-    # Intégration de tes instructions de formatage dans le prompt
-    prompt = f"Analyse cette panne : {panne_description}. Format de réponse obligatoire : ## Identification ## Sécurité ## Tests ## Correction"
+    # Prompt optimisé pour tes sections HTML
+    prompt = f"Analyse cette panne : {panne_description}. Format obligatoire : ## Identification ## Sécurité ## Tests ## Correction"
     
     raw_text = call_gemini_vision(prompt, img_pil)
     return HTMLResponse(content=format_html_output(raw_text))
 
 @app.get("/", response_class=HTMLResponse)
 def home():
-    # Ton interface HTML complète (inchangée pour garder ton design)
+    # Ton interface HTML complète (inchangée)
     return """<!DOCTYPE html>
 <html lang="fr">
 <head>
