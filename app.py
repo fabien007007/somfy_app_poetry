@@ -1,36 +1,27 @@
 import os
 import re
 import base64
-from io import BytesIO
 from fastapi import FastAPI, UploadFile, Form, File
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from groq import Groq
-from PIL import Image
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# Importation de ta base de données Somfy
+# Chargement de la base pour le contexte de l'IA
 try:
     import somfy_database
-    # On s'assure que la base est chargée en texte brut pour l'IA
     BASE_TECHNIQUE = str(somfy_database.SOMFY_PRODUCTS)
 except Exception:
-    BASE_TECHNIQUE = "Base de données non accessible."
+    BASE_TECHNIQUE = "{}"
 
 app = FastAPI()
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 def format_html_output(text: str) -> str:
-    """Structure la réponse en blocs visuels propres."""
+    """Structure les sections de diagnostic avec un design pro."""
     clean = text.replace("**", "").replace("###", "##")
     sections = re.split(r'##', clean)
     html_res = ""
@@ -40,48 +31,40 @@ def format_html_output(text: str) -> str:
         lines = content.split('\n')
         title = lines[0].strip().replace(':', '')
         body = "<br>".join(lines[1:]).strip()
-        icon, css, tag = "⚙️", "diag-section", "INFO"
+        
+        css = "diag-section"
+        icon, tag = "⚙️", "INFO"
         if "Identification" in title: icon, tag = "🆔", "ID"
-        elif "Sécurité" in title: icon, tag, css = "⚠️", "SÉCURITÉ", "diag-section s-secu"
-        elif "Test" in title: icon, tag = "🔍", "TEST"
-        elif "Correction" in title: icon, tag = "🛠️", "FIX"
+        elif "Analyse" in title: icon, tag, css = "🔍", "ANALYSE", "diag-section s-analyse"
+        elif "Correction" in title: icon, tag, css = "🛠️", "RECO", "diag-section s-fix"
+        elif "Base" in title: icon, tag, css = "💾", "UPDATE", "diag-section s-data"
+        
         html_res += f"<div class='{css}'><div class='section-header'><span class='tag'>{tag}</span> {icon} {title}</div><div class='section-body'>{body}</div></div>"
     return html_res
 
 @app.post("/diagnostic")
 async def diagnostic(image: UploadFile = File(None), panne_description: str = Form("")):
-    api_key = os.environ.get("GROQ_API_KEY")
-    if not api_key:
-        return HTMLResponse(content="Erreur : Configuration API manquante.")
+    client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
     
-    client = Groq(api_key=api_key)
-    
-    # SYSTEM PROMPT : On définit ici l'expertise
-    system_instruction = f"""Tu es l'Expert Technique Somfy n°1. 
-    TA SOURCE DE VÉRITÉ EST CETTE BASE : {BASE_TECHNIQUE}
-    
-    RÈGLES STRICTES :
-    1. Regarde la photo pour identifier le modèle (ex: Centralis, Soliris, Animeo).
-    2. Cherche TOUJOURS les procédures de test et câblage exacts dans la BASE fournie.
-    3. Si tu vois '1810392' ou '1822039', utilise les données spécifiques à ces références.
-    4. Réponds UNIQUEMENT avec ce format : ## Identification ## Sécurité ## Tests ## Correction"""
+    system_instruction = f"""Tu es l'Expert Support Somfy pour techniciens. 
+    Analyse la photo (câblage, LEDs, étiquettes) et les symptômes.
+    Utilise cette base : {BASE_TECHNIQUE}. Si absent, utilise tes connaissances expertes (Reset 2/7/2, codes erreurs).
+    PROPOSE UN BLOC JSON DANS 'Enrichissement Base' SI L'INFO EST NOUVELLE.
+    FORMAT : ## Identification ## Analyse Technique ## Correction Experte ## Enrichissement Base"""
 
     content = [{"type": "text", "text": system_instruction}]
-    content.append({"type": "text", "text": f"Panne décrite par le technicien : {panne_description}"})
+    content.append({"type": "text", "text": f"Symptôme : {panne_description}"})
 
     if image and image.filename:
         img_data = await image.read()
         img_b64 = base64.b64encode(img_data).decode('utf-8')
-        content.append({
-            "type": "image_url",
-            "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}
-        })
+        content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}})
 
     try:
         chat_completion = client.chat.completions.create(
             messages=[{"role": "user", "content": content}],
-            model="meta-llama/llama-4-scout-17b-16e-instruct", # Modèle Production Stable
-            temperature=0.2 # On baisse la température pour plus de précision technique
+            model="meta-llama/llama-4-scout-17b-16e-instruct",
+            temperature=0.1
         )
         raw_text = chat_completion.choices[0].message.content
     except Exception as e:
@@ -95,40 +78,46 @@ def home():
 <html lang="fr">
 <head>
     <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Somfy Expert - Vision & Micro</title>
+    <title>Somfy Pro AI</title>
     <style>
-        body { font-family: -apple-system, sans-serif; background: #f4f7f6; padding: 15px; margin: 0; }
-        .card { background: white; max-width: 500px; margin: auto; padding: 20px; border-radius: 20px; box-shadow: 0 8px 20px rgba(0,0,0,0.05); }
-        h1 { color: #667eea; text-align: center; font-size: 1.4rem; }
-        .diag-section { background: #fff; border: 1px solid #eee; border-radius: 12px; margin-top: 15px; overflow: hidden; border-left: 5px solid #667eea; }
-        .s-secu { border-left-color: #ff4d4d; }
-        .section-header { background: #f9f9f9; padding: 10px 15px; font-weight: bold; display: flex; align-items: center; gap: 8px; }
-        .tag { background: #667eea; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; }
-        .section-body { padding: 15px; line-height: 1.5; font-size: 0.95rem; color: #444; }
-        .btn { width: 100%; padding: 15px; margin: 8px 0; border: none; border-radius: 12px; cursor: pointer; font-weight: bold; font-size: 1rem; display: flex; align-items: center; justify-content: center; gap: 10px; }
-        .btn-photo { background: #f0f2f5; color: #555; border: 1px dashed #ccc; }
-        .btn-main { background: #667eea; color: white; margin-top: 15px; }
-        .input-box { position: relative; margin-top: 10px; }
-        textarea { width: 100%; height: 100px; border-radius: 12px; border: 1px solid #ddd; padding: 12px; font-size: 1rem; box-sizing: border-box; resize: none; }
-        .mic { position: absolute; right: 10px; bottom: 12px; border: none; background: #e2e8f0; padding: 10px; border-radius: 50%; cursor: pointer; font-size: 1.2rem; }
-        .mic-on { background: #ff4d4d; color: white; animation: pulse 1s infinite; }
-        @keyframes pulse { 0% {opacity: 1} 50% {opacity: 0.6} 100% {opacity: 1} }
-        #preview { width: 100%; border-radius: 12px; display: none; margin-bottom: 15px; max-height: 200px; object-fit: cover; }
-        #loading { display: none; text-align: center; margin: 15px; color: #667eea; font-weight: bold; }
+        body { font-family: 'Segoe UI', sans-serif; background: #0f172a; color: white; margin: 0; padding: 15px; }
+        .card { background: #1e293b; max-width: 600px; margin: auto; padding: 20px; border-radius: 24px; border: 1px solid #334155; }
+        h1 { font-size: 1.1rem; color: #38bdf8; text-align: center; text-transform: uppercase; margin-bottom: 20px; }
+        .diag-section { background: #334155; border-radius: 12px; margin-top: 15px; border-left: 4px solid #38bdf8; }
+        .s-analyse { border-left-color: #fbbf24; }
+        .s-fix { border-left-color: #22c55e; }
+        .s-data { border-left-color: #a855f7; font-family: monospace; font-size: 0.8rem; }
+        .section-header { padding: 10px 15px; font-weight: bold; background: rgba(0,0,0,0.2); display: flex; align-items: center; gap: 10px; }
+        .tag { font-size: 0.6rem; background: #38bdf8; color: #0f172a; padding: 2px 6px; border-radius: 4px; }
+        .section-body { padding: 15px; color: #cbd5e1; font-size: 0.95rem; }
+        .btn { width: 100%; padding: 16px; border-radius: 12px; border: none; font-weight: bold; cursor: pointer; margin-top: 10px; display: flex; align-items: center; justify-content: center; gap: 10px; }
+        .btn-main { background: #38bdf8; color: #0f172a; }
+        .btn-photo { background: #334155; color: white; border: 1px dashed #64748b; }
+        .btn-share { background: #22c55e; color: white; display: none; }
+        .btn-reset { background: #475569; color: white; display: none; }
+        .input-box { position: relative; margin: 15px 0; }
+        textarea { width: 100%; height: 90px; background: #0f172a; border: 1px solid #334155; border-radius: 12px; color: white; padding: 15px; box-sizing: border-box; }
+        .mic { position: absolute; right: 10px; bottom: 10px; background: #334155; border: none; padding: 8px; border-radius: 50%; color: white; cursor: pointer; }
+        .mic-on { background: #ef4444; animation: pulse 1s infinite; }
+        #preview { width: 100%; border-radius: 12px; display: none; margin-bottom: 15px; border: 2px solid #38bdf8; }
+        #loading { display: none; text-align: center; color: #38bdf8; padding: 10px; }
+        @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.1); } 100% { transform: scale(1); } }
     </style>
 </head>
 <body>
 <div class="card">
-    <h1>Expert Technique Somfy</h1>
+    <h1>Somfy Expert AI</h1>
     <img id="preview">
-    <button class="btn btn-photo" onclick="document.getElementById('in').click()">📸 Photo du boîtier / schéma</button>
+    <button class="btn btn-photo" onclick="document.getElementById('in').click()">📷 Photo de l'équipement</button>
     <input type="file" id="in" accept="image/*" capture="environment" hidden onchange="pv(this)">
     <div class="input-box">
-        <textarea id="desc" placeholder="Décrivez le symptôme ou la panne..."></textarea>
+        <textarea id="desc" placeholder="Décrivez le problème technique..."></textarea>
         <button id="m" class="mic" onclick="tk()">🎙️</button>
     </div>
-    <button id="go" class="btn btn-main" onclick="run()">⚡ Analyser & Diagnostiquer</button>
-    <div id="loading">⏳ Consultation de la base technique Somfy...</div>
+    <button id="go" class="btn btn-main" onclick="run()">⚡ Diagnostiquer</button>
+    <button id="sh" class="btn btn-share" onclick="share()">📤 Partager le rapport</button>
+    <button id="rs" class="btn btn-reset" onclick="location.reload()">🔄 Nouveau Diagnostic</button>
+    <div id="loading">⏳ Analyse technique en cours...</div>
     <div id="result"></div>
 </div>
 <script>
@@ -163,13 +152,16 @@ async function run() {
     try {
         const r = await fetch('/diagnostic', { method: 'POST', body: fd });
         res.innerHTML = await r.text();
+        document.getElementById('sh').style.display = 'flex';
+        document.getElementById('rs').style.display = 'flex';
     } catch (e) { alert("Erreur réseau"); } 
     finally { load.style.display = 'none'; go.disabled = false; }
+}
+function share() {
+    const t = document.getElementById('result').innerText;
+    if (navigator.share) { navigator.share({ title: 'Rapport Somfy', text: t }); }
+    else { navigator.clipboard.writeText(t); alert("Copié dans le presse-papier"); }
 }
 </script>
 </body>
 </html>"""
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
