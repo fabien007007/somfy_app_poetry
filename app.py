@@ -29,6 +29,7 @@ app.add_middleware(
 )
 
 def format_html_output(text: str) -> str:
+    """Structure la réponse IA en blocs visuels Somfy."""
     clean = text.replace("**", "").replace("###", "##")
     sections = re.split(r'##', clean)
     html_res = ""
@@ -49,8 +50,15 @@ def format_html_output(text: str) -> str:
 @app.post("/diagnostic")
 async def diagnostic(image: UploadFile = File(None), panne_description: str = Form("")):
     api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        return HTMLResponse(content="Erreur : Clé API GROQ manquante.")
+    
     client = Groq(api_key=api_key)
     
+    # Nouveau modèle recommandé par Groq pour remplacer la gamme Llama 3.2 Vision
+    # Source : https://console.groq.com/docs/deprecations
+    MODEL_VISION = "meta-llama/llama-4-scout-17b-16e-instruct"
+
     instruction = f"Tu es l'Expert Somfy. Base de données : {SOMFY_PRODUCTS}. Format : ## Identification ## Sécurité ## Tests ## Correction."
     content = [{"type": "text", "text": f"{instruction}\n\nPanne : {panne_description}"}]
 
@@ -63,14 +71,13 @@ async def diagnostic(image: UploadFile = File(None), panne_description: str = Fo
         })
 
     try:
-        # Utilisation du modèle 11b vision qui est le standard actuel
         chat_completion = client.chat.completions.create(
             messages=[{"role": "user", "content": content}],
-            model="llama-3.2-11b-vision-preview", 
+            model=MODEL_VISION, 
         )
         raw_text = chat_completion.choices[0].message.content
     except Exception as e:
-        raw_text = f"## Identification ## Erreur technique \n{str(e)}"
+        raw_text = f"## Identification ## Erreur Technique \nLe modèle {MODEL_VISION} a renvoyé une erreur : {str(e)}"
     
     return HTMLResponse(content=format_html_output(raw_text))
 
@@ -80,7 +87,7 @@ def home():
 <html lang="fr">
 <head>
     <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Somfy Expert AI - Pro</title>
+    <title>Somfy Expert AI - Llama 4</title>
     <style>
         body { font-family: -apple-system, sans-serif; background: #f4f7f6; padding: 15px; margin: 0; }
         .card { background: white; max-width: 500px; margin: auto; padding: 20px; border-radius: 20px; box-shadow: 0 8px 20px rgba(0,0,0,0.05); }
@@ -117,7 +124,7 @@ def home():
     <button id="go" class="btn btn-main" onclick="run()">⚡ Lancer le Diagnostic</button>
     <button id="sh" class="btn btn-share" onclick="share()">📤 Partager</button>
     <button id="rs" class="btn btn-reset" onclick="location.reload()">🔄 Nouveau</button>
-    <div id="loading">⏳ Analyse en cours...</div>
+    <div id="loading">⏳ Analyse multidimensionnelle en cours...</div>
     <div id="result"></div>
 </div>
 <script>
