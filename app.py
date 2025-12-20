@@ -40,21 +40,15 @@ def prepare_image_for_gemini(image_bytes):
         return None
 
 def call_gemini_vision(prompt: str, image_data=None) -> str:
-    if not GEMINI_API_KEY:
-        return "❌ Clé API manquante dans les variables Render."
+    if not GEMINI_API_KEY: return "❌ Clé API manquante."
     try:
-        # Supprime tout devant cette ligne et mets exactement 8 espaces :
         model = genai.GenerativeModel('gemini-1.5-flash')
-        
-        # Pareil ici, 8 espaces :
         content = [prompt]
-        if image_data:
-            content.append(image_data)
-            
+        if image_data: content.append(image_data)
         response = model.generate_content(content)
         return response.text
     except Exception as e:
-        return f"⚙️ Erreur technique : {str(e)}"
+        return f"⚙️ Erreur : {str(e)}"
 
 def format_html_output(text: str) -> str:
     clean = text.replace("**", "").replace("###", "##")
@@ -195,4 +189,5 @@ function share() {
 </script>
 </body>
 </html>"""
+
 
