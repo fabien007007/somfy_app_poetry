@@ -100,7 +100,7 @@ async def diagnostic(image: UploadFile = File(None), panne_description: str = Fo
                 {"role": "system", "content": "Tu es un expert en domotique Somfy précis et professionnel."},
                 {"role": "user", "content": prompt}
             ],
-            model="llama-3.1-70b-versatile",
+            model="llama-3.3-70b-versatile",
         )
         raw_text = chat_completion.choices[0].message.content
     except Exception as e:
@@ -211,3 +211,4 @@ if __name__ == "__main__":
     # Railway définit automatiquement le PORT
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
