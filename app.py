@@ -1,23 +1,25 @@
+import os
+import re
+import base64
+from io import BytesIO
 from fastapi import FastAPI, UploadFile, Form, File
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
-from google import genai 
-import os
-import re
-from io import BytesIO
+from groq import Groq
 from PIL import Image
 from dotenv import load_dotenv
 
-# Importation de ta base de connaissances dynamique
+# Chargement des variables d'environnement
+load_dotenv()
+
+# Importation de ta base Somfy (doit être nommée somfy_database.py)
 try:
     from somfy_database import SOMFY_PRODUCTS
 except ImportError:
     SOMFY_PRODUCTS = {}
 
-load_dotenv()
-
-# Initialisation du nouveau client Google GenAI (Production)
-client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+# Initialisation de Groq avec la clé API de Railway
+client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 app = FastAPI()
 
@@ -29,9 +31,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- LOGIQUE DE FORMATAGE ---
-
 def format_html_output(text: str) -> str:
+    """Transforme le texte de l'IA en sections HTML stylisées."""
     clean = text.replace("**", "").replace("###", "##")
     sections = re.split(r'##', clean)
     html_res = ""
@@ -41,49 +42,42 @@ def format_html_output(text: str) -> str:
         lines = content.split('\n')
         title = lines[0].strip().replace(':', '')
         body = "<br>".join(lines[1:]).strip()
+        
         icon, css, tag = "⚙️", "diag-section", "INFO"
         if "Identification" in title: icon, tag = "🆔", "ID"
         elif "Sécurité" in title: icon, tag, css = "⚠️", "SÉCURITÉ", "diag-section s-secu"
         elif "Test" in title: icon, tag = "🔍", "TEST"
         elif "Correction" in title: icon, tag = "🛠️", "FIX"
+        
         html_res += f"<div class='{css}'><div class='section-header'><span class='tag'>{tag}</span> {icon} {title}</div><div class='section-body'>{body}</div></div>"
     return html_res
 
-# --- ROUTES API ---
-
 @app.post("/diagnostic")
 async def diagnostic(image: UploadFile = File(None), panne_description: str = Form("")):
-    img_pil = None
-    if image and image.filename:
-        raw_data = await image.read()
-        img_pil = Image.open(BytesIO(raw_data))
+    # On prépare le message pour l'IA
+    prompt = f"""
+    Tu es l'Expert Technique Somfy en production.
+    BASE DE DONNÉES SOMFY : {SOMFY_PRODUCTS}
     
-    prompt = f"Analyse cette panne : {panne_description}. Format obligatoire : ## Identification ## Sécurité ## Tests ## Correction"
+    ANALYSE LA PANNE : {panne_description}
     
+    RÈGLES STRICTES :
+    1. Utilise UNIQUEMENT ce format : ## Identification ## Sécurité ## Tests ## Correction
+    2. Si le produit est dans la base, donne ses spécifications et les liens vers ses notices.
+    3. Si bus IB+ détecté, demande de mesurer 16V DC.
+    4. Sécurité : Rappelle le port des gants et la vérification d'absence de tension 230V.
+    """
+
     try:
-        content_list = [prompt]
-        if img_pil:
-            content_list.append(img_pil)
-            
-        response = client.models.generate_content(
-            model="gemini-1.5-flash",
-            contents=content_list,
-            config={
-                "system_instruction": f"""
-                Tu es l'Expert Technique Somfy.
-                BASE DE DONNÉES : {SOMFY_PRODUCTS}
-                
-                CONSIGNES DE PRODUCTION :
-                1. Identifie le matériel à partir de la description ou de l'image.
-                2. Si trouvé dans la base, donne les caractéristiques techniques et les URL des notices.
-                3. Si bus IB+, demande systématiquement la mesure de tension (cible 16V DC).
-                4. Rappelle les règles de sécurité : gants isolants et vérification absence de tension 230V.
-                """
-            }
+        # Groq utilise le modèle Llama 3 pour une réponse instantanée
+        completion = client.chat.completions.create(
+            model="llama-3.1-70b-versatile",
+            messages=[{"role": "system", "content": "Tu es un expert Somfy pro."},
+                      {"role": "user", "content": prompt}]
         )
-        raw_text = response.text
+        raw_text = completion.choices[0].message.content
     except Exception as e:
-        raw_text = f"## Identification ## Erreur technique \n{str(e)}"
+        raw_text = f"## Identification ## Erreur API Groq \n{str(e)}"
     
     return HTMLResponse(content=format_html_output(raw_text))
 
@@ -93,7 +87,7 @@ def home():
 <html lang="fr">
 <head>
     <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Somfy Expert AI</title>
+    <title>Somfy Expert AI - Production</title>
     <style>
         body { font-family: -apple-system, sans-serif; background: #f4f7f6; padding: 15px; margin: 0; }
         .card { background: white; max-width: 500px; margin: auto; padding: 20px; border-radius: 20px; box-shadow: 0 8px 20px rgba(0,0,0,0.05); }
@@ -124,25 +118,17 @@ def home():
     <button class="btn btn-photo" onclick="document.getElementById('in').click()">📸 Photo de l'équipement</button>
     <input type="file" id="in" accept="image/*" capture="environment" hidden onchange="pv(this)">
     <div class="input-box">
-        <textarea id="desc" placeholder="Décrivez la panne..."></textarea>
+        <textarea id="desc" placeholder="Décrivez la panne ou la référence..."></textarea>
         <button id="m" class="mic" onclick="tk()">🎙️</button>
     </div>
     <button id="go" class="btn btn-main" onclick="run()">⚡ Lancer le Diagnostic</button>
-    <button id="sh" class="btn btn-share" onclick="share()">📤 Partager le Diagnostic</button>
-    <button id="rs" class="btn btn-reset" onclick="resetAll()">🔄 Nouveau Diagnostic</button>
-    <div id="loading">⏳ Analyse en cours...</div>
+    <button id="sh" class="btn btn-share" onclick="share()">📤 Partager</button>
+    <button id="rs" class="btn btn-reset" onclick="resetAll()">🔄 Nouveau</button>
+    <div id="loading">⏳ Analyse technique en cours...</div>
     <div id="result"></div>
 </div>
 <script>
 let file = null; let rec = null;
-window.onload = () => {
-    const savedResult = localStorage.getItem('lastDiag');
-    if (savedResult) {
-        document.getElementById('result').innerHTML = savedResult;
-        document.getElementById('sh').style.display = 'flex';
-        document.getElementById('rs').style.display = 'flex';
-    }
-};
 function pv(i) {
     if (i.files[0]) {
         file = i.files[0];
@@ -172,24 +158,17 @@ async function run() {
     fd.append('panne_description', document.getElementById('desc').value);
     try {
         const r = await fetch('/diagnostic', { method: 'POST', body: fd });
-        const htmlText = await r.text();
-        res.innerHTML = htmlText;
-        localStorage.setItem('lastDiag', htmlText);
+        res.innerHTML = await r.text();
         document.getElementById('sh').style.display = 'flex';
         document.getElementById('rs').style.display = 'flex';
     } catch (e) { alert("Erreur de connexion"); } 
     finally { load.style.display = 'none'; go.disabled = false; }
 }
-function resetAll() {
-    if(confirm("Effacer pour un nouveau diagnostic ?")) {
-        localStorage.removeItem('lastDiag');
-        location.reload();
-    }
-}
+function resetAll() { location.reload(); }
 function share() {
     const t = document.getElementById('result').innerText;
     if (navigator.share) { navigator.share({ title: 'Diagnostic Somfy', text: t }); }
-    else { navigator.clipboard.writeText(t); alert("Copié dans le presse-papier !"); }
+    else { navigator.clipboard.writeText(t); alert("Copié !"); }
 }
 </script>
 </body>
