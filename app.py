@@ -14,9 +14,10 @@ load_dotenv()
 # Importation de ta base de données Somfy
 try:
     import somfy_database
-    SOMFY_PRODUCTS = somfy_database.SOMFY_PRODUCTS
+    # On s'assure que la base est chargée en texte brut pour l'IA
+    BASE_TECHNIQUE = str(somfy_database.SOMFY_PRODUCTS)
 except Exception:
-    SOMFY_PRODUCTS = "Base de données non accessible."
+    BASE_TECHNIQUE = "Base de données non accessible."
 
 app = FastAPI()
 
@@ -29,7 +30,7 @@ app.add_middleware(
 )
 
 def format_html_output(text: str) -> str:
-    """Structure la réponse IA en blocs visuels Somfy."""
+    """Structure la réponse en blocs visuels propres."""
     clean = text.replace("**", "").replace("###", "##")
     sections = re.split(r'##', clean)
     html_res = ""
@@ -51,16 +52,22 @@ def format_html_output(text: str) -> str:
 async def diagnostic(image: UploadFile = File(None), panne_description: str = Form("")):
     api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
-        return HTMLResponse(content="Erreur : Clé API GROQ manquante.")
+        return HTMLResponse(content="Erreur : Configuration API manquante.")
     
     client = Groq(api_key=api_key)
     
-    # Nouveau modèle recommandé par Groq pour remplacer la gamme Llama 3.2 Vision
-    # Source : https://console.groq.com/docs/deprecations
-    MODEL_VISION = "meta-llama/llama-4-scout-17b-16e-instruct"
+    # SYSTEM PROMPT : On définit ici l'expertise
+    system_instruction = f"""Tu es l'Expert Technique Somfy n°1. 
+    TA SOURCE DE VÉRITÉ EST CETTE BASE : {BASE_TECHNIQUE}
+    
+    RÈGLES STRICTES :
+    1. Regarde la photo pour identifier le modèle (ex: Centralis, Soliris, Animeo).
+    2. Cherche TOUJOURS les procédures de test et câblage exacts dans la BASE fournie.
+    3. Si tu vois '1810392' ou '1822039', utilise les données spécifiques à ces références.
+    4. Réponds UNIQUEMENT avec ce format : ## Identification ## Sécurité ## Tests ## Correction"""
 
-    instruction = f"Tu es l'Expert Somfy. Base de données : {SOMFY_PRODUCTS}. Format : ## Identification ## Sécurité ## Tests ## Correction."
-    content = [{"type": "text", "text": f"{instruction}\n\nPanne : {panne_description}"}]
+    content = [{"type": "text", "text": system_instruction}]
+    content.append({"type": "text", "text": f"Panne décrite par le technicien : {panne_description}"})
 
     if image and image.filename:
         img_data = await image.read()
@@ -73,11 +80,12 @@ async def diagnostic(image: UploadFile = File(None), panne_description: str = Fo
     try:
         chat_completion = client.chat.completions.create(
             messages=[{"role": "user", "content": content}],
-            model=MODEL_VISION, 
+            model="meta-llama/llama-4-scout-17b-16e-instruct", # Modèle Production Stable
+            temperature=0.2 # On baisse la température pour plus de précision technique
         )
         raw_text = chat_completion.choices[0].message.content
     except Exception as e:
-        raw_text = f"## Identification ## Erreur Technique \nLe modèle {MODEL_VISION} a renvoyé une erreur : {str(e)}"
+        raw_text = f"## Identification ## Erreur \n{str(e)}"
     
     return HTMLResponse(content=format_html_output(raw_text))
 
@@ -87,7 +95,7 @@ def home():
 <html lang="fr">
 <head>
     <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Somfy Expert AI - Llama 4</title>
+    <title>Somfy Expert - Vision & Micro</title>
     <style>
         body { font-family: -apple-system, sans-serif; background: #f4f7f6; padding: 15px; margin: 0; }
         .card { background: white; max-width: 500px; margin: auto; padding: 20px; border-radius: 20px; box-shadow: 0 8px 20px rgba(0,0,0,0.05); }
@@ -100,11 +108,9 @@ def home():
         .btn { width: 100%; padding: 15px; margin: 8px 0; border: none; border-radius: 12px; cursor: pointer; font-weight: bold; font-size: 1rem; display: flex; align-items: center; justify-content: center; gap: 10px; }
         .btn-photo { background: #f0f2f5; color: #555; border: 1px dashed #ccc; }
         .btn-main { background: #667eea; color: white; margin-top: 15px; }
-        .btn-share { background: #25d366; color: white; display: none; }
-        .btn-reset { background: #f8fafc; color: #64748b; border: 1px solid #e2e8f0; display: none; margin-top: 10px; }
         .input-box { position: relative; margin-top: 10px; }
         textarea { width: 100%; height: 100px; border-radius: 12px; border: 1px solid #ddd; padding: 12px; font-size: 1rem; box-sizing: border-box; resize: none; }
-        .mic { position: absolute; right: 10px; bottom: 12px; border: none; background: #f0f2f5; padding: 10px; border-radius: 50%; cursor: pointer; font-size: 1.2rem; }
+        .mic { position: absolute; right: 10px; bottom: 12px; border: none; background: #e2e8f0; padding: 10px; border-radius: 50%; cursor: pointer; font-size: 1.2rem; }
         .mic-on { background: #ff4d4d; color: white; animation: pulse 1s infinite; }
         @keyframes pulse { 0% {opacity: 1} 50% {opacity: 0.6} 100% {opacity: 1} }
         #preview { width: 100%; border-radius: 12px; display: none; margin-bottom: 15px; max-height: 200px; object-fit: cover; }
@@ -113,18 +119,16 @@ def home():
 </head>
 <body>
 <div class="card">
-    <h1>Somfy Expert AI</h1>
+    <h1>Expert Technique Somfy</h1>
     <img id="preview">
-    <button class="btn btn-photo" onclick="document.getElementById('in').click()">📸 Photo de l'équipement</button>
+    <button class="btn btn-photo" onclick="document.getElementById('in').click()">📸 Photo du boîtier / schéma</button>
     <input type="file" id="in" accept="image/*" capture="environment" hidden onchange="pv(this)">
     <div class="input-box">
-        <textarea id="desc" placeholder="Décrivez la panne..."></textarea>
+        <textarea id="desc" placeholder="Décrivez le symptôme ou la panne..."></textarea>
         <button id="m" class="mic" onclick="tk()">🎙️</button>
     </div>
-    <button id="go" class="btn btn-main" onclick="run()">⚡ Lancer le Diagnostic</button>
-    <button id="sh" class="btn btn-share" onclick="share()">📤 Partager</button>
-    <button id="rs" class="btn btn-reset" onclick="location.reload()">🔄 Nouveau</button>
-    <div id="loading">⏳ Analyse multidimensionnelle en cours...</div>
+    <button id="go" class="btn btn-main" onclick="run()">⚡ Analyser & Diagnostiquer</button>
+    <div id="loading">⏳ Consultation de la base technique Somfy...</div>
     <div id="result"></div>
 </div>
 <script>
@@ -159,15 +163,8 @@ async function run() {
     try {
         const r = await fetch('/diagnostic', { method: 'POST', body: fd });
         res.innerHTML = await r.text();
-        document.getElementById('sh').style.display = 'flex';
-        document.getElementById('rs').style.display = 'flex';
     } catch (e) { alert("Erreur réseau"); } 
     finally { load.style.display = 'none'; go.disabled = false; }
-}
-function share() {
-    const t = document.getElementById('result').innerText;
-    if (navigator.share) { navigator.share({ title: 'Somfy Diag', text: t }); }
-    else { navigator.clipboard.writeText(t); alert("Copié !"); }
 }
 </script>
 </body>
