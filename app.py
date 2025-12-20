@@ -42,12 +42,18 @@ def prepare_image_for_gemini(image_bytes):
 def call_gemini_vision(prompt: str, image_data=None) -> str:
     if not GEMINI_API_KEY: return "❌ Clé API manquante."
     try:
-        model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        # On repasse sur 1.5-flash qui a un quota plus élevé en gratuit
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
         content = [prompt]
         if image_data: content.append(image_data)
+        
         response = model.generate_content(content)
         return response.text
     except Exception as e:
+        # Si le quota est encore bloqué, on affiche un message clair
+        if "429" in str(e):
+            return "⏳ Limite de requêtes atteinte. Réessayez dans 1 minute."
         return f"⚙️ Erreur : {str(e)}"
 
 def format_html_output(text: str) -> str:
@@ -189,6 +195,7 @@ function share() {
 </script>
 </body>
 </html>"""
+
 
 
 
