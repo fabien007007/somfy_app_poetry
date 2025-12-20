@@ -9,20 +9,19 @@ from groq import Groq
 from PIL import Image
 from dotenv import load_dotenv
 
-# Chargement des variables d'environnement
+# Chargement des variables (Local ou Railway)
 load_dotenv()
 
-# Importation de ta base Somfy (doit être nommée somfy_database.py)
+# Importation sécurisée de ta base de données
 try:
-    from somfy_database import SOMFY_PRODUCTS
-except ImportError:
-    SOMFY_PRODUCTS = {}
-
-# Initialisation de Groq avec la clé API de Railway
-client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+    import somfy_database
+    SOMFY_PRODUCTS = somfy_database.SOMFY_PRODUCTS
+except Exception:
+    SOMFY_PRODUCTS = "Base de données non détectée ou vide."
 
 app = FastAPI()
 
+# Configuration CORS pour la production
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -32,52 +31,80 @@ app.add_middleware(
 )
 
 def format_html_output(text: str) -> str:
-    """Transforme le texte de l'IA en sections HTML stylisées."""
+    """Transforme le texte brut de l'IA en blocs HTML stylisés Somfy."""
+    # Nettoyage des caractères gras markdown
     clean = text.replace("**", "").replace("###", "##")
+    # Découpage par sections (titres commençant par ##)
     sections = re.split(r'##', clean)
     html_res = ""
+    
     for s in sections:
         content = s.strip()
-        if not content: continue
+        if not content:
+            continue
+            
         lines = content.split('\n')
         title = lines[0].strip().replace(':', '')
         body = "<br>".join(lines[1:]).strip()
         
+        # Style par défaut
         icon, css, tag = "⚙️", "diag-section", "INFO"
-        if "Identification" in title: icon, tag = "🆔", "ID"
-        elif "Sécurité" in title: icon, tag, css = "⚠️", "SÉCURITÉ", "diag-section s-secu"
-        elif "Test" in title: icon, tag = "🔍", "TEST"
-        elif "Correction" in title: icon, tag = "🛠️", "FIX"
         
-        html_res += f"<div class='{css}'><div class='section-header'><span class='tag'>{tag}</span> {icon} {title}</div><div class='section-body'>{body}</div></div>"
+        # Personnalisation selon le titre
+        if "Identification" in title:
+            icon, tag = "🆔", "ID"
+        elif "Sécurité" in title:
+            icon, tag, css = "⚠️", "SÉCURITÉ", "diag-section s-secu"
+        elif "Test" in title:
+            icon, tag = "🔍", "TEST"
+        elif "Correction" in title:
+            icon, tag = "🛠️", "FIX"
+            
+        html_res += f"""
+        <div class='{css}'>
+            <div class='section-header'>
+                <span class='tag'>{tag}</span> {icon} {title}
+            </div>
+            <div class='section-body'>{body}</div>
+        </div>
+        """
     return html_res
 
 @app.post("/diagnostic")
 async def diagnostic(image: UploadFile = File(None), panne_description: str = Form("")):
-    # On prépare le message pour l'IA
+    # Initialisation du client Groq à l'intérieur de la fonction (évite les erreurs de build)
+    api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        return HTMLResponse(content="<div class='diag-section s-secu'>Erreur : Clé API manquante sur Railway</div>")
+    
+    client = Groq(api_key=api_key)
+    
+    # Prompt de production
     prompt = f"""
-    Tu es l'Expert Technique Somfy en production.
-    BASE DE DONNÉES SOMFY : {SOMFY_PRODUCTS}
+    Tu es l'Expert Technique Somfy. 
+    BASE DE CONNAISSANCES : {SOMFY_PRODUCTS}
     
-    ANALYSE LA PANNE : {panne_description}
+    DESCRIPTION DE LA PANNE : {panne_description}
     
-    RÈGLES STRICTES :
-    1. Utilise UNIQUEMENT ce format : ## Identification ## Sécurité ## Tests ## Correction
-    2. Si le produit est dans la base, donne ses spécifications et les liens vers ses notices.
-    3. Si bus IB+ détecté, demande de mesurer 16V DC.
-    4. Sécurité : Rappelle le port des gants et la vérification d'absence de tension 230V.
+    INSTRUCTIONS DE RÉPONSE :
+    1. Analyse la description pour identifier le produit.
+    2. Utilise UNIQUEMENT le format : ## Identification ## Sécurité ## Tests ## Correction
+    3. Si bus IB+ mentionné : Exige la mesure de tension bus (Cible 16V DC).
+    4. Sécurité : Toujours rappeler le port des gants isolants et la vérification absence de tension 230V.
     """
 
     try:
-        # Groq utilise le modèle Llama 3 pour une réponse instantanée
-        completion = client.chat.completions.create(
+        # Utilisation de Llama 3 pour la rapidité et la gratuité
+        chat_completion = client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": "Tu es un expert en domotique Somfy précis et professionnel."},
+                {"role": "user", "content": prompt}
+            ],
             model="llama-3.1-70b-versatile",
-            messages=[{"role": "system", "content": "Tu es un expert Somfy pro."},
-                      {"role": "user", "content": prompt}]
         )
-        raw_text = completion.choices[0].message.content
+        raw_text = chat_completion.choices[0].message.content
     except Exception as e:
-        raw_text = f"## Identification ## Erreur API Groq \n{str(e)}"
+        raw_text = f"## Identification ## Erreur Technique \nImpossible de joindre le moteur d'IA : {str(e)}"
     
     return HTMLResponse(content=format_html_output(raw_text))
 
@@ -86,28 +113,30 @@ def home():
     return """<!DOCTYPE html>
 <html lang="fr">
 <head>
-    <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Somfy Expert AI - Production</title>
     <style>
-        body { font-family: -apple-system, sans-serif; background: #f4f7f6; padding: 15px; margin: 0; }
+        body { font-family: -apple-system, system-ui, sans-serif; background: #f4f7f6; padding: 15px; margin: 0; }
         .card { background: white; max-width: 500px; margin: auto; padding: 20px; border-radius: 20px; box-shadow: 0 8px 20px rgba(0,0,0,0.05); }
-        h1 { color: #667eea; text-align: center; font-size: 1.4rem; }
+        h1 { color: #667eea; text-align: center; font-size: 1.4rem; margin-bottom: 20px; }
         .diag-section { background: #fff; border: 1px solid #eee; border-radius: 12px; margin-top: 15px; overflow: hidden; border-left: 5px solid #667eea; }
         .s-secu { border-left-color: #ff4d4d; }
-        .section-header { background: #f9f9f9; padding: 10px 15px; font-weight: bold; display: flex; align-items: center; gap: 8px; }
+        .section-header { background: #f9f9f9; padding: 10px 15px; font-weight: bold; display: flex; align-items: center; gap: 8px; font-size: 0.9rem; }
         .tag { background: #667eea; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; }
         .section-body { padding: 15px; line-height: 1.5; font-size: 0.95rem; color: #444; }
-        .btn { width: 100%; padding: 15px; margin: 8px 0; border: none; border-radius: 12px; cursor: pointer; font-weight: bold; font-size: 1rem; display: flex; align-items: center; justify-content: center; gap: 10px; }
+        .btn { width: 100%; padding: 15px; margin: 8px 0; border: none; border-radius: 12px; cursor: pointer; font-weight: bold; font-size: 1rem; display: flex; align-items: center; justify-content: center; gap: 10px; transition: 0.2s; }
         .btn-photo { background: #f0f2f5; color: #555; border: 1px dashed #ccc; }
         .btn-main { background: #667eea; color: white; margin-top: 15px; }
+        .btn-main:disabled { background: #cbd5e0; }
         .btn-share { background: #25d366; color: white; display: none; }
         .btn-reset { background: #f8fafc; color: #64748b; border: 1px solid #e2e8f0; display: none; margin-top: 10px; }
         .input-box { position: relative; margin-top: 10px; }
-        textarea { width: 100%; height: 100px; border-radius: 12px; border: 1px solid #ddd; padding: 12px; font-size: 1rem; box-sizing: border-box; }
-        .mic { position: absolute; right: 10px; bottom: 12px; border: none; background: #f0f2f5; padding: 10px; border-radius: 50%; cursor: pointer; font-size: 1.2rem; }
+        textarea { width: 100%; height: 100px; border-radius: 12px; border: 1px solid #ddd; padding: 12px; font-size: 1rem; box-sizing: border-box; resize: none; }
+        .mic { position: absolute; right: 10px; bottom: 12px; border: none; background: #f0f2f5; padding: 10px; border-radius: 50%; cursor: pointer; }
         .mic-on { background: #ff4d4d; color: white; animation: pulse 1s infinite; }
         @keyframes pulse { 0% {opacity: 1} 50% {opacity: 0.6} 100% {opacity: 1} }
-        #preview { width: 100%; border-radius: 12px; display: none; margin-bottom: 15px; }
+        #preview { width: 100%; border-radius: 12px; display: none; margin-bottom: 15px; object-fit: cover; max-height: 200px; }
         #loading { display: none; text-align: center; margin: 15px; color: #667eea; font-weight: bold; }
     </style>
 </head>
@@ -118,13 +147,13 @@ def home():
     <button class="btn btn-photo" onclick="document.getElementById('in').click()">📸 Photo de l'équipement</button>
     <input type="file" id="in" accept="image/*" capture="environment" hidden onchange="pv(this)">
     <div class="input-box">
-        <textarea id="desc" placeholder="Décrivez la panne ou la référence..."></textarea>
+        <textarea id="desc" placeholder="Décrivez les symptômes ou la référence..."></textarea>
         <button id="m" class="mic" onclick="tk()">🎙️</button>
     </div>
     <button id="go" class="btn btn-main" onclick="run()">⚡ Lancer le Diagnostic</button>
-    <button id="sh" class="btn btn-share" onclick="share()">📤 Partager</button>
-    <button id="rs" class="btn btn-reset" onclick="resetAll()">🔄 Nouveau</button>
-    <div id="loading">⏳ Analyse technique en cours...</div>
+    <button id="sh" class="btn btn-share" onclick="share()">📤 Partager le rapport</button>
+    <button id="rs" class="btn btn-reset" onclick="resetAll()">🔄 Nouveau Diagnostic</button>
+    <div id="loading">⏳ Analyse en cours...</div>
     <div id="result"></div>
 </div>
 <script>
@@ -139,7 +168,7 @@ function pv(i) {
 }
 function tk() {
     const S = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!S) return alert("Micro non supporté");
+    if (!S) return alert("Micro non supporté sur ce navigateur");
     if (!rec) {
         rec = new S(); rec.lang = 'fr-FR';
         rec.onresult = (e) => { document.getElementById('desc').value += " " + e.results[0][0].transcript; };
@@ -152,23 +181,26 @@ async function run() {
     const res = document.getElementById('result');
     const load = document.getElementById('loading');
     const go = document.getElementById('go');
+    const desc = document.getElementById('desc').value;
+    if(!desc && !file) return alert("Veuillez fournir une photo ou une description");
     go.disabled = true; load.style.display = 'block'; res.innerHTML = "";
     const fd = new FormData();
     if (file) fd.append('image', file);
-    fd.append('panne_description', document.getElementById('desc').value);
+    fd.append('panne_description', desc);
     try {
         const r = await fetch('/diagnostic', { method: 'POST', body: fd });
-        res.innerHTML = await r.text();
+        const html = await r.text();
+        res.innerHTML = html;
         document.getElementById('sh').style.display = 'flex';
         document.getElementById('rs').style.display = 'flex';
-    } catch (e) { alert("Erreur de connexion"); } 
+    } catch (e) { alert("Erreur de connexion au serveur"); } 
     finally { load.style.display = 'none'; go.disabled = false; }
 }
-function resetAll() { location.reload(); }
+function resetAll() { if(confirm("Effacer le diagnostic actuel ?")) location.reload(); }
 function share() {
     const t = document.getElementById('result').innerText;
-    if (navigator.share) { navigator.share({ title: 'Diagnostic Somfy', text: t }); }
-    else { navigator.clipboard.writeText(t); alert("Copié !"); }
+    if (navigator.share) { navigator.share({ title: 'Diag Somfy AI', text: t }); }
+    else { navigator.clipboard.writeText(t); alert("Copié dans le presse-papier"); }
 }
 </script>
 </body>
@@ -176,4 +208,6 @@ function share() {
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+    # Railway définit automatiquement le PORT
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
