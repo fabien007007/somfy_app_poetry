@@ -1,0 +1,16 @@
+{
+  "name": "Somfy Expert AI",
+  "short_name": "SomfyAI",
+  "description": "Diagnostic Expert Somfy par IA",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#38bdf8",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/8144/8144503.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
